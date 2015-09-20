@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from urlparse import urlparse
-from crawlfrontier.contrib.canonicalsolvers.basic import BasicCanonicalSolver
-from crawlfrontier.contrib.backends.hbase import _state
+from frontera.contrib.canonicalsolvers.basic import BasicCanonicalSolver
+from distributed_frontera.backends.hbase import _state
 from base import BaseCrawlingStrategy
 
 
