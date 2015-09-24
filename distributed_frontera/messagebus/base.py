@@ -34,6 +34,10 @@ class BaseSpiderLogStream(object):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def flush(self):
+        pass
+
 
 class BaseUpdateScoreStream(object):
     __metaclass__ = ABCMeta

@@ -117,6 +117,10 @@ class SpiderLogStream(BaseSpiderLogStream):
         group = self._sw_group if type == 'sw' else self._db_group
         return Consumer(self._conn, self._topic_done, group, partition_id)
 
+    def flush(self):
+        if self._prod is not None:
+            self._prod.stop()
+
 
 class SpiderFeedStream(BaseSpiderFeedStream):
     def __init__(self, messagebus):
