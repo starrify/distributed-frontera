@@ -7,17 +7,13 @@ class BaseStreamConsumer(object):
     @abstractmethod
     def get_messages(self, timeout=0.1, count=1):
         """
-        :return: raw message
+        :return: generator with raw messages
         """
         raise NotImplementedError
 
 
 class BaseSpiderLogStream(object):
     __metaclass__ = ABCMeta
-
-    @abstractmethod
-    def __init__(self, partitioner):
-        pass
 
     @abstractmethod
     def put(self, message, key):
@@ -29,11 +25,11 @@ class BaseSpiderLogStream(object):
         raise NotImplementedError
 
     @abstractmethod
-    def consumer(self, partition_id, group):
+    def consumer(self, partition_id, type):
         """
         Messages consumed by all known groups can be freed
         :param partition_id: int
-        :param group: consumer group
+        :param type: consumer type, can be either "sw" or "db"
         :return: BaseStreamConsumer instance assigned to given partition_id
         """
         raise NotImplementedError
