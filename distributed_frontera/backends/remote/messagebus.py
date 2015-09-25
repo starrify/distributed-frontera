@@ -25,6 +25,9 @@ class MessageBusBackend(Backend):
     def from_manager(clas, manager):
         return clas(manager)
 
+    def frontier_start(self):
+        pass
+
     def frontier_stop(self):
         self.spider_log.flush()
 
