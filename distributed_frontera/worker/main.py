@@ -4,18 +4,16 @@ from argparse import ArgumentParser
 from time import asctime
 
 from twisted.internet import reactor
-from kafka import KafkaClient, KeyedProducer, SimpleConsumer
-from kafka.common import OffsetOutOfRangeError
-from kafka.protocol import CODEC_SNAPPY
 from frontera.core.manager import FrontierManager
 from frontera.utils.url import parse_domain_from_url_fast
 
 from distributed_frontera.backends.remote.codecs.msgpack import Decoder, Encoder
 from distributed_frontera.settings import Settings
-from distributed_frontera.worker.partitioner import Crc32NamePartitioner
+from distributed_frontera.messagebus.kafkabus import MessageBus
+
 from utils import CallLaterOnce
 from server import WorkerJsonRpcService
-from offsets import Fetcher
+
 
 logging.basicConfig()
 logger = logging.getLogger("cf")
@@ -60,22 +58,11 @@ class Slot(object):
 
 class FrontierWorker(object):
     def __init__(self, settings, no_batches, no_scoring, no_incoming):
-        self._kafka = KafkaClient(settings.get('KAFKA_LOCATION'))
-        self._producer = KeyedProducer(self._kafka, partitioner=Crc32NamePartitioner, codec=CODEC_SNAPPY)
-
-        self._in_consumer = SimpleConsumer(self._kafka,
-                                       settings.get('FRONTIER_GROUP'),
-                                       settings.get('INCOMING_TOPIC'),
-                                       buffer_size=1048576,
-                                       max_buffer_size=10485760)
-        if not no_scoring:
-            self._scoring_consumer = SimpleConsumer(self._kafka,
-                                           settings.get('FRONTIER_GROUP'),
-                                           settings.get('SCORING_TOPIC'),
-                                           buffer_size=262144,
-                                           max_buffer_size=1048576)
-
-        self._offset_fetcher = Fetcher(self._kafka, settings.get('OUTGOING_TOPIC'), settings.get('FRONTIER_GROUP'))
+        self.mb = MessageBus(settings)
+        spider_log = self.mb.spider_log()
+        self.spider_log_consumer = spider_log.consumer(partition_id=None, type='db')
+        self.update_score = self.mb.update_score()
+        self.spider_feed = self.mb.spider_feed()
 
         self._manager = FrontierManager.from_settings(settings)
         self._backend = self._manager.backend
@@ -97,41 +84,42 @@ class FrontierWorker(object):
         self.slot.schedule(on_start=True)
         reactor.run()
 
+    def disable_new_batches(self):
+        self.slot.disable_new_batches = True
+
+    def enable_new_batches(self):
+        self.slot.disable_new_batches = False
+
     def consume_incoming(self, *args, **kwargs):
         consumed = 0
-        try:
-            for m in self._in_consumer.get_messages(count=self.consumer_batch_size, block=True, timeout=1.0):
-                try:
-                    msg = self._decoder.decode(m.message.value)
-                except (KeyError, TypeError), e:
-                    logger.error("Decoding error: %s", e)
-                    continue
-                else:
-                    type = msg[0]
-                    if type == 'add_seeds':
-                        _, seeds = msg
-                        logger.info('Adding %i seeds', len(seeds))
-                        for seed in seeds:
-                            logger.debug('URL: ', seed.url)
-                        self._backend.add_seeds(seeds)
-                    if type == 'page_crawled':
-                        _, response, links = msg
-                        logger.debug("Page crawled %s", response.url)
-                        if response.meta['jid'] != self.job_id:
-                            continue
-                        self._backend.page_crawled(response, links)
-                    if type == 'request_error':
-                        _, request, error = msg
-                        if request.meta['jid'] != self.job_id:
-                            continue
-                        logger.info("Request error %s", request.url)
-                        self._backend.request_error(request, error)
-                finally:
-                    consumed += 1
-        except OffsetOutOfRangeError, e:
-            # https://github.com/mumrah/kafka-python/issues/263
-            self._in_consumer.seek(0, 2)  # moving to the tail of the log
-            logger.info("Caught OffsetOutOfRangeError, moving to the tail of the log.")
+        for m in self.spider_log_consumer.get_messages(timeout=1.0, count=self.consumer_batch_size):
+            try:
+                msg = self._decoder.decode(m)
+            except (KeyError, TypeError), e:
+                logger.error("Decoding error: %s", e)
+                continue
+            else:
+                type = msg[0]
+                if type == 'add_seeds':
+                    _, seeds = msg
+                    logger.info('Adding %i seeds', len(seeds))
+                    for seed in seeds:
+                        logger.debug('URL: ', seed.url)
+                    self._backend.add_seeds(seeds)
+                if type == 'page_crawled':
+                    _, response, links = msg
+                    logger.debug("Page crawled %s", response.url)
+                    if response.meta['jid'] != self.job_id:
+                        continue
+                    self._backend.page_crawled(response, links)
+                if type == 'request_error':
+                    _, request, error = msg
+                    if request.meta['jid'] != self.job_id:
+                        continue
+                    logger.info("Request error %s", request.url)
+                    self._backend.request_error(request, error)
+            finally:
+                consumed += 1
 
         logger.info("Consumed %d items.", consumed)
         self.stats['last_consumed'] = consumed
@@ -141,27 +129,22 @@ class FrontierWorker(object):
 
     def consume_scoring(self, *args, **kwargs):
         consumed = 0
-        try:
-            batch = {}
-            for m in self._scoring_consumer.get_messages(count=1024):
-                try:
-                    msg = self._decoder.decode(m.message.value)
-                except (KeyError, TypeError), e:
-                    logger.error("Decoding error: %s", e)
-                    continue
-                else:
-                    if msg[0] == 'update_score':
-                        _, fprint, score, url, schedule = msg
-                        batch[fprint] = (score, url, schedule)
-                    if msg[0] == 'new_job_id':
-                        self.job_id = msg[1]
-                finally:
-                    consumed += 1
-            self._backend.update_score(batch)
-        except OffsetOutOfRangeError, e:
-            # https://github.com/mumrah/kafka-python/issues/263
-            self._scoring_consumer.seek(0, 2)  # moving to the tail of the log
-            logger.info("Caught OffsetOutOfRangeError, moving to the tail of the log.")
+        batch = {}
+        for m in self.update_score.get_messages():
+            try:
+                msg = self._decoder.decode(m)
+            except (KeyError, TypeError), e:
+                logger.error("Decoding error: %s", e)
+                continue
+            else:
+                if msg[0] == 'update_score':
+                    _, fprint, score, url, schedule = msg
+                    batch[fprint] = (score, url, schedule)
+                if msg[0] == 'new_job_id':
+                    self.job_id = msg[1]
+            finally:
+                consumed += 1
+        self._backend.update_score(batch)
 
         logger.info("Consumed %d items during scoring consumption.", consumed)
         self.stats['last_consumed_scoring'] = consumed
@@ -169,18 +152,10 @@ class FrontierWorker(object):
         self.slot.schedule()
 
     def new_batch(self, *args, **kwargs):
-        lags = self._offset_fetcher.get()
-        logger.info("Got lags %s" % str(lags))
-
-        partitions = []
-        for partition, lag in lags.iteritems():
-            if lag < self.max_next_requests:
-                partitions.append(partition)
-
+        partitions = self.spider_feed.available_partitions()
         logger.info("Getting new batches for partitions %s" % str(",").join(map(str, partitions)))
         if not partitions:
             return 0
-
         count = 0
         for request in self._backend.get_next_requests(self.max_next_requests, partitions=partitions):
             try:
@@ -193,15 +168,14 @@ class FrontierWorker(object):
                 continue
             finally:
                 count +=1
-
             try:
                 netloc, name, scheme, sld, tld, subdomain = parse_domain_from_url_fast(request.url)
             except Exception, e:
-                logger.error("URL parsing error %s, fingerprint %s, url %s" % (e, 
-                                                                                request.meta['fingerprint'], 
+                logger.error("URL parsing error %s, fingerprint %s, url %s" % (e,
+                                                                                request.meta['fingerprint'],
                                                                                 request.url))
-            encoded_name = name.encode('utf-8', 'ignore')
-            self._producer.send_messages(self.outgoing_topic, encoded_name, eo)
+            key = name.encode('utf-8', 'ignore')
+            self.spider_feed.put(eo, key)
         logger.info("Pushed new batch of %d items", count)
         self.stats['last_batch_size'] = count
         self.stats.setdefault('batches_after_start', 0)
@@ -209,11 +183,6 @@ class FrontierWorker(object):
         self.stats['last_batch_generated'] = asctime()
         return count
 
-    def disable_new_batches(self):
-        self.slot.disable_new_batches = True
-
-    def enable_new_batches(self):
-        self.slot.disable_new_batches = False
 
 if __name__ == '__main__':
     parser = ArgumentParser(description="Crawl frontier worker.")
