@@ -43,9 +43,9 @@ class BaseUpdateScoreStream(object):
     __metaclass__ = ABCMeta
 
     @abstractmethod
-    def get(self):
+    def get_messages(self, count=1024, timeout=1.0):
         """
-        :return: str encoded message
+        :return: generator with str encoded messages
         """
         raise NotImplementedError
 

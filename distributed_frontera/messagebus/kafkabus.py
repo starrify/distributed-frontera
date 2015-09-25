@@ -114,6 +114,12 @@ class SpiderLogStream(BaseSpiderLogStream):
         return success
 
     def consumer(self, partition_id, type):
+        """
+        Creates spider log consumer with BaseStreamConsumer interface
+        :param partition_id: can be None or integer
+        :param type: either 'db' or 'sw'
+        :return:
+        """
         group = self._sw_group if type == 'sw' else self._db_group
         return Consumer(self._conn, self._topic_done, group, partition_id)
 
@@ -156,8 +162,9 @@ class UpdateScoreStream(BaseUpdateScoreStream):
         self._producer = SimpleProducer(messagebus.conn, codec=CODEC_SNAPPY)
         self._topic = messagebus.topic_scoring
 
-    def get(self):
-        return self._scoring_consumer.get_message()
+    def get_messages(self, count=1024, timeout=1.0):
+        for m in self._scoring_consumer.get_messages(count=count, timeout=timeout):
+            yield m.message.balue
 
     def put(self, message):
         self._producer.send_messages(self._topic, message)
