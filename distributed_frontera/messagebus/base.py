@@ -15,6 +15,7 @@ class BaseStreamConsumer(object):
 class BaseSpiderLogStream(object):
     __metaclass__ = ABCMeta
 
+    '''
     @abstractmethod
     def put(self, message, key):
         """
@@ -23,6 +24,7 @@ class BaseSpiderLogStream(object):
         :param key: str
         """
         raise NotImplementedError
+    '''
 
     @abstractmethod
     def consumer(self, partition_id, type):
@@ -33,10 +35,6 @@ class BaseSpiderLogStream(object):
         :return: BaseStreamConsumer instance assigned to given partition_id
         """
         raise NotImplementedError
-
-    @abstractmethod
-    def flush(self):
-        pass
 
 
 class BaseUpdateScoreStream(object):
