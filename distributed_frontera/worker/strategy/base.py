@@ -50,6 +50,10 @@ class BaseCrawlingStrategy(object):
         """
         return {}
 
-    @abstractmethod
     def finished(self):
+        """
+        Called by Strategy worker, after finishing processing each cycle of spider log. If this method returns true,
+        then Strategy worker reports that crawling goal is achieved, stops and exits.
+        :return: bool
+        """
         return False
