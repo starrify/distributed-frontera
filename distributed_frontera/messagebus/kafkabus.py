@@ -80,6 +80,7 @@ class SpiderLogStream(BaseSpiderLogStream):
         self._db_group = messagebus.general_group
         self._sw_group = messagebus.sw_group
         self._cons = None
+        self._prod = None
         self._connect_producer()
 
     def _connect_producer(self):
