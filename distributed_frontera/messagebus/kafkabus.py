@@ -166,8 +166,8 @@ class UpdateScoreStream(BaseUpdateScoreStream):
         for m in self._scoring_consumer.get_messages(count=count, timeout=timeout):
             yield m.message.balue
 
-    def put(self, message):
-        self._producer.send_messages(self._topic, message)
+    def put(self, *messages):
+        self._producer.send_messages(self._topic, *messages)
 
 
 class MessageBus(BaseMessageBus):

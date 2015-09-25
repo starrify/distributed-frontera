@@ -5,12 +5,10 @@ from argparse import ArgumentParser
 from importlib import import_module
 
 from frontera.core.manager import FrontierManager
-from kafka import KafkaClient, SimpleProducer, SimpleConsumer
-from kafka.common import OffsetOutOfRangeError
-from kafka.protocol import CODEC_SNAPPY
 
 from distributed_frontera.settings import Settings
 from distributed_frontera.backends.remote.codecs.msgpack import Decoder, Encoder
+from distributed_frontera.messagebus.kafkabus import MessageBus
 
 logging.basicConfig()
 logger = logging.getLogger("score")
@@ -18,75 +16,65 @@ logger = logging.getLogger("score")
 
 class ScoringWorker(object):
     def __init__(self, settings, strategy_module):
-        kafka = KafkaClient(settings.get('KAFKA_LOCATION'))
-        self._producer = SimpleProducer(kafka, codec=CODEC_SNAPPY)
         partition_id = settings.get('SCORING_PARTITION_ID')
         if partition_id == None or type(partition_id) != int:
             raise AttributeError("Scoring worker partition id isn't set.")
-        self._in_consumer = SimpleConsumer(kafka,
-                                       settings.get('SCORING_GROUP'),
-                                       settings.get('INCOMING_TOPIC'),
-                                       buffer_size=1048576,
-                                       max_buffer_size=10485760,
-                                       partitions=[partition_id])
+
+        mb = MessageBus(settings)
+        spider_log = mb.spider_log()
+        self.consumer = spider_log.consumer(partition_id=partition_id, type='sw')
+        self.update_score = mb.update_score()
 
         self._manager = FrontierManager.from_settings(settings)
         self._decoder = Decoder(self._manager.request_model, self._manager.response_model)
         self._encoder = Encoder(self._manager.request_model)
 
         self.consumer_batch_size = settings.get('CONSUMER_BATCH_SIZE', 128)
-        self.outgoing_topic = settings.get('SCORING_TOPIC')
         self.strategy = strategy_module.CrawlingStrategy()
         self.backend = self._manager.backend
         self.stats = {}
         self.cache_flush_counter = 0
         self.job_id = 0
 
-
     def work(self):
         consumed = 0
         batch = []
         fingerprints = set()
-        try:
-            for m in self._in_consumer.get_messages(count=self.consumer_batch_size, block=True, timeout=1.0):
-                try:
-                    msg = self._decoder.decode(m.message.value)
-                except (KeyError, TypeError), e:
-                    logger.error("Decoding error: %s", e)
+        for m in self.consumer.get_messages(count=self.consumer_batch_size, timeout=1.0):
+            try:
+                msg = self._decoder.decode(m)
+            except (KeyError, TypeError), e:
+                logger.error("Decoding error: %s", e)
+                continue
+            else:
+                type = msg[0]
+                batch.append(msg)
+                if type == 'add_seeds':
+                    _, seeds = msg
+                    fingerprints.update(map(lambda x: x.meta['fingerprint'], seeds))
                     continue
-                else:
-                    type = msg[0]
-                    batch.append(msg)
-                    if type == 'add_seeds':
-                        _, seeds = msg
-                        fingerprints.update(map(lambda x: x.meta['fingerprint'], seeds))
-                        continue
 
-                    if type == 'page_crawled':
-                        _, response, links = msg
-                        fingerprints.add(response.meta['fingerprint'])
-                        fingerprints.update(map(lambda x: x.meta['fingerprint'], links))
-                        continue
+                if type == 'page_crawled':
+                    _, response, links = msg
+                    fingerprints.add(response.meta['fingerprint'])
+                    fingerprints.update(map(lambda x: x.meta['fingerprint'], links))
+                    continue
 
-                    if type == 'request_error':
-                        _, request, error = msg
-                        fingerprints.add(request.meta['fingerprint'])
-                        continue
+                if type == 'request_error':
+                    _, request, error = msg
+                    fingerprints.add(request.meta['fingerprint'])
+                    continue
 
-                    raise TypeError('Unknown message type %s' % type)
-                finally:
-                    consumed += 1
-        except OffsetOutOfRangeError, e:
-            # https://github.com/mumrah/kafka-python/issues/263
-            self._in_consumer.seek(0, 2)  # moving to the tail of the log
-            logger.info("Caught OffsetOutOfRangeError, moving to the tail of the log.")
+                raise TypeError('Unknown message type %s' % type)
+            finally:
+                consumed += 1
 
         self.backend.fetch_states(list(fingerprints))
         fingerprints.clear()
         results = []
         for msg in batch:
             if len(results) > 1024:
-                self._producer.send_messages(self.outgoing_topic, *results)
+                self.update_score.put(*results)
                 results = []
 
             type = msg[0]
@@ -110,7 +98,7 @@ class ScoringWorker(object):
                 results.extend(self.on_request_error(request, error))
                 continue
         if len(results):
-            self._producer.send_messages(self.outgoing_topic, *results)
+            self.update_score.put(*results)
 
         if self.cache_flush_counter == 30:
             logger.info("Flushing states")
@@ -121,7 +109,7 @@ class ScoringWorker(object):
         self.cache_flush_counter += 1
 
         if self.strategy.finished():
-            logger.info("Succesfully reached the crawling goal. Exiting.")
+            logger.info("Successfully reached the crawling goal. Exiting.")
             exit(0)
 
         logger.info("Consumed %d items.", consumed)
@@ -131,7 +119,6 @@ class ScoringWorker(object):
     def run(self):
         while True:
             self.work()
-
 
     def on_add_seeds(self, seeds):
         logger.info('Adding %i seeds', len(seeds))
@@ -174,7 +161,7 @@ class ScoringWorker(object):
                     True
                 )
                 output.append(encoded)
-        return output       
+        return output
 
     def on_request_error(self, request, error):
         self.backend.update_states(request, False)
@@ -191,6 +178,7 @@ class ScoringWorker(object):
             )
             return [encoded]
         return []
+
 
 if __name__ == '__main__':
     parser = ArgumentParser(description="Crawl frontier scoring worker.")

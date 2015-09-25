@@ -45,14 +45,16 @@ class BaseUpdateScoreStream(object):
     @abstractmethod
     def get_messages(self, count=1024, timeout=1.0):
         """
+        Getting messages from scoring stream.
         :return: generator with str encoded messages
         """
         raise NotImplementedError
 
     @abstractmethod
-    def put(self, message):
+    def put(self, *messages):
         """
-        :param message: encoded message
+        Sending messages to scoring stream.
+        :param *messages: encoded message(s)
         """
         raise NotImplementedError
 
