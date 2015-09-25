@@ -184,10 +184,6 @@ class MessageBus(BaseMessageBus):
 
         self.conn = KafkaClient(server)
 
-        logger = getLogger("kafka")
-        handler = StreamHandler()
-        logger.addHandler(handler)
-
     def spider_log(self):
         return SpiderLogStream(self)
 
