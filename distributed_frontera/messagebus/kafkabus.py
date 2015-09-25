@@ -11,7 +11,7 @@ from distributed_frontera.worker.offsets import Fetcher
 from logging import getLogger, StreamHandler
 from time import sleep
 
-logger = getLogger("distributed_frontera.messagebus.kafka")
+logger = getLogger("distributed_frontera.messagebus.kafkabus")
 
 
 class Consumer(BaseStreamConsumer):
