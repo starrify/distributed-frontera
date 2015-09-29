@@ -12,7 +12,7 @@ class Consumer(BaseStreamConsumer):
         self.subscriber = context.socket(zmq.SUB)
         self.subscriber.connect(location)
 
-        filter = pack('>B', partition_id) if partition_id else ''
+        filter = pack('>B', partition_id) if partition_id is not None else ''
         self.subscriber.setsockopt(zmq.SUBSCRIBE, filter)
 
     def get_messages(self, timeout=0.1, count=1):
@@ -21,7 +21,7 @@ class Consumer(BaseStreamConsumer):
             try:
                 msg = self.subscriber.recv_multipart(copy=True, flags=zmq.NOBLOCK)
             except zmq.Again:
-                sleep(0.001)
+                sleep(0.01)
                 if time() - started > timeout:
                     break
             else:
@@ -81,6 +81,26 @@ class UpdateScoreStream(BaseUpdateScoreStream):
         return UpdateScoreProducer(self.context, self.location)
 
 
+class SpiderFeedConsumer(BaseStreamConsumer):
+    def __init__(self, context, location, partition_id):
+        self.subscriber = context.socket(zmq.REP)
+        self.subscriber.connect(location)
+
+    def get_messages(self, timeout=0.1, count=1):
+        started = time()
+        while count:
+            try:
+                msg = self.subscriber.recv_multipart(copy=True, flags=zmq.NOBLOCK)
+            except zmq.Again:
+                sleep(0.01)
+                if time() - started > timeout:
+                    break
+            else:
+                yield msg[1]
+                count -= 1
+
+
+
 class SpiderFeedStream(BaseSpiderFeedStream):
     def __init__(self, messagebus):
         self.context = messagebus.context
@@ -104,8 +124,8 @@ class MessageBus(BaseMessageBus):
         # FIXME: Options!
         self.spider_log_location = "tcp://127.0.0.1:5551"
         self.spider_log_partitions = [i for i in range(2)]
-        self.update_score_location = "tcp://*:5552"
-        self.spider_feed_location = "tcp://*:5553"
+        self.update_score_location = "tcp://127.0.0.1:5552"
+        self.spider_feed_location = "tcp://127.0.0.1:5553"
         self.spider_feed_partitions = [i for i in range(2)]
 
     def spider_log(self):
