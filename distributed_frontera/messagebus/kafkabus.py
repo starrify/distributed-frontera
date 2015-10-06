@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 from distributed_frontera.messagebus.base import BaseMessageBus, BaseSpiderLogStream, BaseSpiderFeedStream, \
-    BaseStreamConsumer, BaseUpdateScoreStream
+    BaseStreamConsumer, BaseUpdateScoreStream, BaseStreamProducer
 
-from kafka import KafkaClient, SimpleConsumer, KeyedProducer, SimpleProducer
+from kafka import KafkaClient, SimpleConsumer, KeyedProducer as KafkaKeyedProducer, SimpleProducer as KafkaSimpleProducer
 from kafka.common import BrokerResponseError, MessageSizeTooLargeError
 from kafka.protocol import CODEC_SNAPPY
 
@@ -22,7 +22,7 @@ class Consumer(BaseStreamConsumer):
         self._conn = conn
         self._group = group
         self._topic = topic
-        self._partition_ids = [partition_id] if partition_id else None
+        self._partition_ids = [partition_id] if partition_id != None else None
 
         self._cons = None
         self._connect_consumer()
@@ -48,11 +48,9 @@ class Consumer(BaseStreamConsumer):
             yield
         while True:
             try:
-                success = False
                 for offmsg in self._cons.get_messages(
                         count,
                         timeout=timeout):
-                    success = True
                     try:
                         yield offmsg.message.value
                     except ValueError:
@@ -60,50 +58,58 @@ class Consumer(BaseStreamConsumer):
                             "Could not decode {0} message: {1}".format(
                                 self._topic,
                                 offmsg.message.value))
-                if not success:
-                    logger.warning(
-                        "Timeout ({0} seconds) while trying to get {1} requests".format(
-                            timeout,
-                            count)
-                    )
                 break
             except Exception, err:
                 logger.warning("Error %s" % err)
                 break
 
 
-class SpiderLogStream(BaseSpiderLogStream):
-    def __init__(self, messagebus):
-        self._conn = messagebus.conn
-        self._topic_done = messagebus.topic_done
-        self._partition_id = messagebus.spider_partition_id
-        self._db_group = messagebus.general_group
-        self._sw_group = messagebus.sw_group
-        self._cons = None
+class SimpleProducer(BaseStreamProducer):
+    def __init__(self, connection, topic):
+        self._connection = connection
+        self._topic = topic
+        self._create()
+
+    def _create(self):
+        self._producer = KafkaSimpleProducer(self._connection, codec=CODEC_SNAPPY)
+
+    def send(self, key, *messages):
+        self._producer.send_messages(self._topic, *messages)
+
+    def flush(self):
+        self._producer.stop()
+        del self._producer
+        self._create()
+
+
+class KeyedProducer(BaseStreamProducer):
+    def __init__(self, connection, topic_done, partitioner_cls):
         self._prod = None
-        self._connect_producer()
+        self._conn = connection
+        self._topic_done = topic_done
+        self._partitioner_cls = partitioner_cls
 
     def _connect_producer(self):
         if self._prod is None:
             try:
-                self._prod = KeyedProducer(self._conn, partitioner=FingerprintPartitioner, codec=CODEC_SNAPPY)
+                self._prod = KafkaKeyedProducer(self._conn, partitioner=self._partitioner_cls, codec=CODEC_SNAPPY)
             except BrokerResponseError:
                 self._prod = None
                 logger.warning("Could not connect producer to Kafka server")
                 return False
         return True
 
-    def put(self, message, key, fail_wait_time=1.0, max_tries=5):
+    def send(self, key, *messages):
         success = False
+        max_tries = 5
         if self._connect_producer():
             n_tries = 0
             while not success and n_tries < max_tries:
                 try:
-                    self._prod.send_messages(self._topic_done, key, message)
+                    self._prod.send_messages(self._topic_done, key, *messages)
                     success = True
                 except MessageSizeTooLargeError, e:
                     logger.error(str(e))
-                    logger.debug("Message: %s" % message)
                     break
                 except BrokerResponseError:
                     n_tries += 1
@@ -111,8 +117,23 @@ class SpiderLogStream(BaseSpiderLogStream):
                         "Could not send message. Try {0}/{1}".format(
                             n_tries, max_tries)
                     )
-                    sleep(fail_wait_time)
+                    sleep(1.0)
         return success
+
+    def flush(self):
+        if self._prod is not None:
+            self._prod.stop()
+
+
+class SpiderLogStream(BaseSpiderLogStream):
+    def __init__(self, messagebus):
+        self._conn = messagebus.conn
+        self._db_group = messagebus.general_group
+        self._sw_group = messagebus.sw_group
+        self._topic_done = messagebus.topic_done
+
+    def producer(self):
+        return KeyedProducer(self._conn, self._topic_done, FingerprintPartitioner)
 
     def consumer(self, partition_id, type):
         """
@@ -124,10 +145,6 @@ class SpiderLogStream(BaseSpiderLogStream):
         group = self._sw_group if type == 'sw' else self._db_group
         return Consumer(self._conn, self._topic_done, group, partition_id)
 
-    def flush(self):
-        if self._prod is not None:
-            self._prod.stop()
-
 
 class SpiderFeedStream(BaseSpiderFeedStream):
     def __init__(self, messagebus):
@@ -136,7 +153,6 @@ class SpiderFeedStream(BaseSpiderFeedStream):
         self._topic = messagebus.topic_todo
         self._max_next_requests = messagebus.max_next_requests
         self._offset_fetcher = Fetcher(self._conn, self._topic, self._general_group)
-        self._producer = KeyedProducer(self._conn, partitioner=Crc32NamePartitioner, codec=CODEC_SNAPPY)
 
     def consumer(self, partition_id):
         return Consumer(self._conn, self._topic, self._general_group, partition_id)
@@ -149,26 +165,21 @@ class SpiderFeedStream(BaseSpiderFeedStream):
                 partitions.append(partition)
         return partitions
 
-    def put(self, message, key):
-        self._producer.send_messages(self._topic, key, message)
+    def producer(self):
+        return KeyedProducer(self._conn, self._topic, Crc32NamePartitioner)
 
 
 class UpdateScoreStream(BaseUpdateScoreStream):
     def __init__(self, messagebus):
-        self._scoring_consumer = SimpleConsumer(messagebus.conn,
-                                       messagebus.general_group,
-                                       messagebus.topic_scoring,
-                                       buffer_size=262144,
-                                       max_buffer_size=1048576)
-        self._producer = SimpleProducer(messagebus.conn, codec=CODEC_SNAPPY)
         self._topic = messagebus.topic_scoring
+        self._group = messagebus.general_group
+        self._conn = messagebus.conn
 
-    def get_messages(self, count=1024, timeout=1.0):
-        for m in self._scoring_consumer.get_messages(count=count, timeout=timeout):
-            yield m.message.value
+    def consumer(self):
+        return Consumer(self._conn, self._topic, self._group, partition_id=None)
 
-    def put(self, *messages):
-        self._producer.send_messages(self._topic, *messages)
+    def producer(self):
+        return SimpleProducer(self._conn, self._topic)
 
 
 class MessageBus(BaseMessageBus):

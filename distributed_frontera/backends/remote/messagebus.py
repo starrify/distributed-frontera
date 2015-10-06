@@ -13,9 +13,9 @@ class MessageBusBackend(Backend):
         self.mb = MessageBus(settings)
         self._encoder = Encoder(manager.request_model)
         self._decoder = Decoder(manager.request_model, manager.response_model)
-        self.spider_log = self.mb.spider_log()
+        self.spider_log_producer = self.mb.spider_log().producer()
         spider_feed = self.mb.spider_feed()
-        self.consumer = spider_feed.consumer(settings.get('SPIDER_PARTITION_ID'))
+        self.consumer = spider_feed.consumer(partition_id=settings.get('SPIDER_PARTITION_ID'))
         self._get_timeout = float(settings.get('KAFKA_GET_TIMEOUT', 5.0))
 
         self._buffer = OverusedBuffer(self._get_next_requests,
@@ -29,16 +29,16 @@ class MessageBusBackend(Backend):
         pass
 
     def frontier_stop(self):
-        self.spider_log.flush()
+        self.spider_log_producer.flush()
 
     def add_seeds(self, seeds):
-        self.spider_log.put(self._encoder.encode_add_seeds(seeds), seeds[0].meta['fingerprint'])
+        self.spider_log_producer.send(seeds[0].meta['fingerprint'], self._encoder.encode_add_seeds(seeds))
 
     def page_crawled(self, response, links):
-        self.spider_log.put(self._encoder.encode_page_crawled(response, links), response.meta['fingerprint'])
+        self.spider_log_producer.send(response.meta['fingerprint'], self._encoder.encode_page_crawled(response, links))
 
     def request_error(self, page, error):
-        self.spider_log.put(self._encoder.encode_request_error(page, error), page.meta['fingerprint'])
+        self.spider_log_producer.send(page.meta['fingerprint'], self._encoder.encode_request_error(page, error))
 
     def _get_next_requests(self, max_n_requests, **kwargs):
         requests = []

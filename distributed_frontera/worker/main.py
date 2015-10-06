@@ -60,9 +60,11 @@ class FrontierWorker(object):
     def __init__(self, settings, no_batches, no_scoring, no_incoming):
         self.mb = MessageBus(settings)
         spider_log = self.mb.spider_log()
-        self.spider_log_consumer = spider_log.consumer(partition_id=None, type='db')
-        self.update_score = self.mb.update_score()
+        update_score = self.mb.update_score()
         self.spider_feed = self.mb.spider_feed()
+        self.spider_log_consumer = spider_log.consumer(partition_id=None, type='db')
+        self.update_score_consumer = update_score.consumer()
+        self.spider_feed_producer = self.spider_feed.producer()
 
         self._manager = FrontierManager.from_settings(settings)
         self._backend = self._manager.backend
@@ -130,7 +132,7 @@ class FrontierWorker(object):
     def consume_scoring(self, *args, **kwargs):
         consumed = 0
         batch = {}
-        for m in self.update_score.get_messages():
+        for m in self.update_score_consumer.get_messages():
             try:
                 msg = self._decoder.decode(m)
             except (KeyError, TypeError), e:
@@ -175,7 +177,7 @@ class FrontierWorker(object):
                                                                                 request.meta['fingerprint'],
                                                                                 request.url))
             key = name.encode('utf-8', 'ignore')
-            self.spider_feed.put(eo, key)
+            self.spider_feed_producer.send(key, eo)
         logger.info("Pushed new batch of %d items", count)
         self.stats['last_batch_size'] = count
         self.stats.setdefault('batches_after_start', 0)

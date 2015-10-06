@@ -22,8 +22,9 @@ class ScoringWorker(object):
 
         mb = MessageBus(settings)
         spider_log = mb.spider_log()
+        update_score = mb.update_score()
         self.consumer = spider_log.consumer(partition_id=partition_id, type='sw')
-        self.update_score = mb.update_score()
+        self.update_score_producer = update_score.producer()
 
         self._manager = FrontierManager.from_settings(settings)
         self._decoder = Decoder(self._manager.request_model, self._manager.response_model)
@@ -74,7 +75,7 @@ class ScoringWorker(object):
         results = []
         for msg in batch:
             if len(results) > 1024:
-                self.update_score.put(*results)
+                self.update_score_producer.send(None, *results)
                 results = []
 
             type = msg[0]
@@ -98,7 +99,7 @@ class ScoringWorker(object):
                 results.extend(self.on_request_error(request, error))
                 continue
         if len(results):
-            self.update_score.put(*results)
+            self.update_score_producer.send(None, *results)
 
         if self.cache_flush_counter == 30:
             logger.info("Flushing states")

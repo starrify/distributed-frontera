@@ -12,19 +12,33 @@ class BaseStreamConsumer(object):
         raise NotImplementedError
 
 
+class BaseStreamProducer(object):
+    __metaclass__ = ABCMeta
+
+    @abstractmethod
+    def send(self, key, *messages):
+        """
+        Sending messages to stream.
+        :param key: str key used for partitioning, None for non-keyed channels
+        :param *messages: encoded message(s)
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def flush(self):
+        raise NotImplementedError
+
+
 class BaseSpiderLogStream(object):
     __metaclass__ = ABCMeta
 
-    '''
     @abstractmethod
-    def put(self, message, key):
+    def producer(self):
         """
         Using FingerprintPartitioner (because of state cache in Strategy Workers)
-        :param message: str, encoded message
-        :param key: str
+        :return: BaseStreamProducer instance
         """
         raise NotImplementedError
-    '''
 
     @abstractmethod
     def consumer(self, partition_id, type):
@@ -41,18 +55,16 @@ class BaseUpdateScoreStream(object):
     __metaclass__ = ABCMeta
 
     @abstractmethod
-    def get_messages(self, count=1024, timeout=1.0):
+    def consumer(self):
         """
-        Getting messages from scoring stream.
-        :return: generator with str encoded messages
+        :return: BaseStreamConsumer instance
         """
         raise NotImplementedError
 
     @abstractmethod
-    def put(self, *messages):
+    def producer(self):
         """
-        Sending messages to scoring stream.
-        :param *messages: encoded message(s)
+        :return: BaseStreamProducer instance
         """
         raise NotImplementedError
 
@@ -67,11 +79,10 @@ class BaseSpiderFeedStream(object):
         raise NotImplementedError
 
     @abstractmethod
-    def put(self, message, key):
+    def producer(self):
         """
         Using Crc32NamePartitioner
-        :param message: str encoded message
-        :param key: str
+        :return: BaseStreamProducer instance
         """
         raise NotImplementedError
 
