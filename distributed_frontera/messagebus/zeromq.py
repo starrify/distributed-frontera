@@ -128,7 +128,7 @@ class MessageBus(BaseMessageBus):
         # FIXME: Options!
         self.socket_config = SocketConfig("127.0.0.1", 5550)
 
-        self.spider_log_partitions = [i for i in range(1)]
+        self.spider_log_partitions = [i for i in range(2)]
         self.update_score_location = "tcp://127.0.0.1:5552"
         self.spider_feed_location = "tcp://127.0.0.1:5553"
         self.spider_feed_partitions = [i for i in range(1)]

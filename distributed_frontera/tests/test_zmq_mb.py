@@ -9,7 +9,7 @@ def test_spider_log_producer():
     producer = mb.spider_log().producer()
     while True:
         producer.send(sha1('helloworld.com'), 'http://helloworld.com/way/to/the/sun')
-        producer.send(sha1('oups.com'), 'http://way.to.the.sun')
+        producer.send(sha1('oups1.com'), 'http://way.to.the.sun')
         print "."
         sleep(1)
 

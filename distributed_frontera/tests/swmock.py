@@ -8,7 +8,7 @@ def main():
     partition_id = int(sys.argv[1])
     mb = MessageBus(None)
     sl = mb.spider_log()
-    consumer = sl.consumer(partition_id=None, type='sw')
+    consumer = sl.consumer(partition_id=partition_id, type='sw')
     while True:
         for m in consumer.get_messages(timeout=1.0):
             print m
