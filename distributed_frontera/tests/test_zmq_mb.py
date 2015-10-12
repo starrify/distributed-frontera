@@ -8,8 +8,9 @@ def test_spider_log_producer():
     mb = MessageBus(None)
     producer = mb.spider_log().producer()
     while True:
-        producer.send('http://helloworld.com/way/to/the/sun', sha1('helloworld.com'))
-        producer.send('http://way.to.the.sun', sha1('oups.com'))
+        producer.send(sha1('helloworld.com'), 'http://helloworld.com/way/to/the/sun')
+        producer.send(sha1('oups.com'), 'http://way.to.the.sun')
+        print "."
         sleep(1)
 
 
