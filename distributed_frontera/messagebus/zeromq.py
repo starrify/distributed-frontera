@@ -2,6 +2,7 @@
 from base import BaseMessageBus, BaseSpiderLogStream, BaseStreamConsumer, BaseSpiderFeedStream, \
     BaseUpdateScoreStream
 from distributed_frontera.worker.partitioner import FingerprintPartitioner, Crc32NamePartitioner
+from socket_config import SocketConfig
 import zmq
 from time import time, sleep
 from struct import pack
@@ -33,7 +34,7 @@ class Consumer(BaseStreamConsumer):
 class Producer(object):
     def __init__(self, context, location):
         self.sender = context.socket(zmq.PUB)
-        self.sender.bind(location)
+        self.sender.connect(location)
 
     def send(self, key, *messages):
         # Guarantee that msg is actually a list or tuple (should always be true)
@@ -43,7 +44,6 @@ class Producer(object):
         # Raise TypeError if any message is not encoded as bytes
         if any(not isinstance(m, six.binary_type) for m in messages):
             raise TypeError("all produce message payloads must be type bytes")
-
         partition = self.partitioner.partition(key)
         for msg in messages:
             self.sender.send_multipart([pack(">B", partition), msg])
@@ -61,14 +61,17 @@ class SpiderLogProducer(Producer):
 class SpiderLogStream(BaseSpiderLogStream):
     def __init__(self, messagebus):
         self.context = messagebus.context
-        self.location = messagebus.spider_log_location
+        self.sw_in_location = messagebus.socket_config.sw_in()
+        self.db_in_location = messagebus.socket_config.db_in()
+        self.out_location = messagebus.socket_config.spiders_out()
         self.partitions = messagebus.spider_log_partitions
 
     def producer(self):
-        return SpiderLogProducer(self.context, self.location, self.partitions)
+        return SpiderLogProducer(self.context, self.out_location, self.partitions)
 
     def consumer(self, partition_id, type):
-        return Consumer(self.context, self.location, partition_id)
+        location = self.sw_in_location if type == 'sw' else self.db_in_location
+        return Consumer(self.context, location, partition_id)
 
 
 class UpdateScoreProducer(Producer):
@@ -123,7 +126,8 @@ class MessageBus(BaseMessageBus):
         self.context = zmq.Context()
 
         # FIXME: Options!
-        self.spider_log_location = "tcp://127.0.0.1:5551"
+        self.socket_config = SocketConfig("127.0.0.1", 5550)
+
         self.spider_log_partitions = [i for i in range(1)]
         self.update_score_location = "tcp://127.0.0.1:5552"
         self.spider_feed_location = "tcp://127.0.0.1:5553"
