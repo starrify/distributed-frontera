@@ -3,7 +3,7 @@
 For Ubuntu:
 ```bash
 $ apt-get install libsnappy-dev
-$ pip install distributed-frontera
+$ pip install git+https://github.com/scrapinghub/distributed-frontera.git
 ```
 
 ## Documentation
