@@ -66,8 +66,8 @@ There are spanish internet URLs from DMOZ directory in general spider repository
 crawling.
 Starting the spiders:::
 
-    $ scrapy crawl general -L INFO -s FRONTERA_SETTINGS=frontera.spider0 -s SEEDS_SOURCE=seeds_es_dmoz.txt
-    $ scrapy crawl general -L INFO -s FRONTERA_SETTINGS=frontera.spider1
+    $ scrapy crawl general -L INFO -s FRONTERA_SETTINGS=frontier.spider0 -s SEEDS_SOURCE=seeds_es_dmoz.txt
+    $ scrapy crawl general -L INFO -s FRONTERA_SETTINGS=frontier.spider1
 
 
 You should end up with 2 spider processes running. Each should read it's own Frontera config, and first one is using
